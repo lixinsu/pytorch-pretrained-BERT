@@ -227,9 +227,10 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             if length > max_tokens_for_doc:
                 length = max_tokens_for_doc
             doc_spans.append(_DocSpan(start=start_offset, length=length))
-            if start_offset + length == len(all_doc_tokens):
-                break
-            start_offset += min(length, doc_stride)
+            break
+            #if start_offset + length == len(all_doc_tokens):
+            #    break
+            #start_offset += min(length, doc_stride)
 
         for (doc_span_index, doc_span) in enumerate(doc_spans):
             tokens = []
