@@ -13,4 +13,4 @@ python3 examples/run_squad.py \
   --num_train_epochs 2.0 \
   --max_seq_length 384 \
   --doc_stride 128 \
-  --output_dir data/models/squadv1.1_b24_base/
+  --output_dir data/models/squadv1.1_b24_truncated/
