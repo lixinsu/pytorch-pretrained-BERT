@@ -1088,18 +1088,28 @@ class BertForQuestionAnswering(PreTrainedBertModel):
     def __init__(self, config):
         super(BertForQuestionAnswering, self).__init__(config)
         self.bert = BertModel(config)
-        # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
+        # TODO check with Google if it's normal there is no dropout
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.qa_outputs = nn.Linear(config.hidden_size, 2)
         self.apply(self.init_bert_weights)
+        self.probes = nn.ModuleList([nn.Linear(config.hidden_size, 2) for _ in range(12)])
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None):
-        sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
-        logits = self.qa_outputs(sequence_output)
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None,
+                start_positions=None, end_positions=None):
+        sequence_output, _ = self.bert(input_ids, token_type_ids,
+                                       attention_mask,
+                                       output_all_encoded_layers=True)
+        logits = self.qa_outputs(sequence_output[-1])
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
 
+        probe_results = [prob(hidden.detach()) for prob, hidden in
+                         zip(self.probes, sequence_output)]
+        probe_split_results = [x.split(1, dim=-1) for x in probe_results]
+        probe_start_end_results = [[x[0].squeeze(-1), x[1].squeeze(-1)] for x
+                                   in probe_split_results]
+        rv_probe_logits = torch.cat(probe_results, dim=2)
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
@@ -1112,9 +1122,11 @@ class BertForQuestionAnswering(PreTrainedBertModel):
             end_positions.clamp_(0, ignored_index)
 
             loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            probe_start_loss = [(loss_fct(x[0], start_positions) + loss_fct(
+                x[1], end_positions)) / 2 for x in probe_start_end_results]
             start_loss = loss_fct(start_logits, start_positions)
             end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
-            return total_loss
+            return total_loss, probe_start_loss
         else:
-            return start_logits, end_logits
+            return start_logits, end_logits, rv_probe_logits

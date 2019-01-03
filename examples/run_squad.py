@@ -406,7 +406,7 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 
 RawResult = collections.namedtuple("RawResult",
-                                   ["unique_id", "start_logits", "end_logits"])
+                                   ["unique_id", "start_logits", "end_logits", "probe_logits"])
 
 
 def write_predictions(all_examples, all_features, all_results, n_best_size,
@@ -430,6 +430,12 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
 
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
+    all_final_logits = []
+    all_probe_logits = []
+    fout_final = open(os.path.join(os.path.dirname(output_prediction_file),
+                      'final_logits.jsonl'), 'w')
+    fout_probe = open(os.path.join(os.path.dirname(output_prediction_file),
+                      'probe_logits.jsonl'), 'w')
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
 
@@ -535,12 +541,29 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
 
         all_predictions[example.qas_id] = nbest_json[0]["text"]
         all_nbest_json[example.qas_id] = nbest_json
-
+        tmp_result = unique_id_to_result[example_index_to_features[
+            example_index][0].unique_id]
+        #all_final_logits.append( [example.qas_id, [tmp_result.start_logits,
+        #                                    tmp_result.end_logits] ])
+        #all_probe_logits.append( [example.qas_id, tmp_result.probe_logits] )
+        fout_final.write(json.dumps([example.qas_id, [tmp_result.start_logits,
+                                                      tmp_result.end_logits]]) + '\n')
+        fout_probe.write(json.dumps([example.qas_id, tmp_result.probe_logits]) + '\n')
     with open(output_prediction_file, "w") as writer:
         writer.write(json.dumps(all_predictions, indent=4) + "\n")
 
     with open(output_nbest_file, "w") as writer:
-        writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
+        writer.write(json.dumps(all_nbest_json) + "\n")
+
+    # Hacking coding
+    with open(os.path.join(os.path.dirname(output_prediction_file),
+                           'final_logits.pkl'), 'wb') as writer:
+        pickle.dump(all_final_logits, writer)
+
+    with open(os.path.join(os.path.dirname(output_prediction_file),
+                           'probe_logits.pkl'), 'wb') as writer:
+        pickle.dump(all_probe_logits, writer)
+
 
 
 def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
@@ -681,7 +704,17 @@ def warmup_linear(x, warmup=0.002):
 def main():
     parser = argparse.ArgumentParser()
 
+    ## Probe parameters
+    parser.add_argument("--debug",
+                        default=False,
+                        action='store_true',
+                        help="Whether not to enter debugging")
+    parser.add_argument("--insert_probe",
+                        default=False,
+                        action='store_true',
+                        help="Whether not to train probe")
     ## Required parameters
+
     parser.add_argument("--bert_model", default=None, type=str, required=True,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
                              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
@@ -787,8 +820,8 @@ def main():
             raise ValueError(
                 "If `do_predict` is True, then `predict_file` must be specified.")
 
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
-        raise ValueError("Output directory () already exists and is not empty.")
+    #if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
+    #    raise ValueError("Output directory () already exists and is not empty.")
     os.makedirs(args.output_dir, exist_ok=True)
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model)
@@ -798,6 +831,8 @@ def main():
     if args.do_train:
         train_examples = read_squad_examples(
             input_file=args.train_file, is_training=True)
+        if args.debug:
+            train_examples = train_examples[:256]
         num_train_steps = int(
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
@@ -823,7 +858,7 @@ def main():
 
     # hack to remove pooler, which is not used
     # thus it produce None grad that break apex
-    param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
+    param_optimizer = [n for n in param_optimizer if ( ( 'pooler' not in n[0]) and ('probe' not in n[0]) )]
 
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -855,6 +890,8 @@ def main():
                              warmup=args.warmup_proportion,
                              t_total=t_total)
 
+    probe_params = [p for n, p in list(model.named_parameters()) if 'probe' in n]
+    probe_optimizers = [torch.optim.Adam(probe_params[2*i:2*i+1]) for i in range(12)]
     global_step = 0
     if args.do_train:
         cached_train_features_file = args.train_file+'_{0}_{1}_{2}_{3}'.format(
@@ -894,35 +931,48 @@ def main():
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
         model.train()
+        main_logger = open(os.path.join( args.output_dir, 'main_losses.json'), 'w')
+        losses_logger = open(os.path.join(args.output_dir, 'probe_losses.json'), 'w')
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
                 input_ids, input_mask, segment_ids, start_positions, end_positions = batch
-                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions)
+                loss, prob_losses = model(input_ids, segment_ids, input_mask, start_positions, end_positions)
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
+                    prob_losses = [iter_loss.mean() for iter_loss in prob_losses]
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
-
+                    prob_losses = [iter_loss/args.gradient_accumulation_steps for iter_loss in prob_losses]
                 if args.fp16:
                     optimizer.backward(loss)
                 else:
-                    loss.backward()
+                    loss.backward(retain_graph=True)
+                for iter_loss in prob_losses:
+                    iter_loss.backward(retain_graph=True)
+
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     # modify learning rate with special warm up BERT uses
                     lr_this_step = args.learning_rate * warmup_linear(global_step/t_total, args.warmup_proportion)
                     for param_group in optimizer.param_groups:
                         param_group['lr'] = lr_this_step
+
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
+                    for iter_optim in probe_optimizers:
+                        iter_optim.step()
+                        iter_optim.zero_grad()
+                main_logger.write(json.dumps(loss.detach().cpu().tolist()) + '\n')
+                losses_logger.write(json.dumps([iter_loss.detach().cpu().tolist() for iter_loss in prob_losses]) + '\n')
 
-    # Save a trained model
-    model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+        # Save a trained model
+        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+
     output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
-    torch.save(model_to_save.state_dict(), output_model_file)
-
+    if args.do_train:
+        torch.save(model_to_save.state_dict(), output_model_file)
     # Load a trained model that you have fine-tuned
     model_state_dict = torch.load(output_model_file)
     model = BertForQuestionAnswering.from_pretrained(args.bert_model, state_dict=model_state_dict)
@@ -931,6 +981,8 @@ def main():
     if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = read_squad_examples(
             input_file=args.predict_file, is_training=False)
+        if args.debug:
+            eval_examples = eval_examples[:256]
         eval_features = convert_examples_to_features(
             examples=eval_examples,
             tokenizer=tokenizer,
@@ -955,7 +1007,17 @@ def main():
 
         model.eval()
         all_results = []
+
         logger.info("Start evaluating")
+
+        def recursive_detach(x):
+            if not isinstance(x, torch.Tensor):
+                for i in range(len(x)):
+                    x[i] = recursive_detach(x[i])
+                return x
+            else:
+                return x.detach().cpu().tolist()
+
         for input_ids, input_mask, segment_ids, example_indices in tqdm(eval_dataloader, desc="Evaluating"):
             if len(all_results) % 1000 == 0:
                 logger.info("Processing example: %d" % (len(all_results)))
@@ -963,15 +1025,17 @@ def main():
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
             with torch.no_grad():
-                batch_start_logits, batch_end_logits = model(input_ids, segment_ids, input_mask)
+                batch_start_logits, batch_end_logits, prob_start_end_logits = model(input_ids, segment_ids, input_mask)
             for i, example_index in enumerate(example_indices):
                 start_logits = batch_start_logits[i].detach().cpu().tolist()
                 end_logits = batch_end_logits[i].detach().cpu().tolist()
+                probe_logits = prob_start_end_logits[i].detach().cpu().tolist()
                 eval_feature = eval_features[example_index.item()]
                 unique_id = int(eval_feature.unique_id)
                 all_results.append(RawResult(unique_id=unique_id,
                                              start_logits=start_logits,
-                                             end_logits=end_logits))
+                                             end_logits=end_logits,
+                                             probe_logits=probe_logits))
         output_prediction_file = os.path.join(args.output_dir, "predictions.json")
         output_nbest_file = os.path.join(args.output_dir, "nbest_predictions.json")
         write_predictions(eval_examples, eval_features, all_results,
