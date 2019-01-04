@@ -24,7 +24,10 @@ import os
 import logging
 import argparse
 import random
+import uuid
+import json
 from tqdm import tqdm, trange
+
 
 import numpy as np
 import torch
@@ -98,6 +101,10 @@ class DataProcessor(object):
                 lines.append(line)
             return lines
 
+    @classmethod
+    def _read_json(cls, input_file):
+        return [json.loads(line) for line in open(input_file)]
+
 
 class MrpcProcessor(DataProcessor):
     """Processor for the MRPC data set (GLUE version)."""
@@ -130,6 +137,114 @@ class MrpcProcessor(DataProcessor):
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
+
+
+class SogouYesNoProcessor(DataProcessor):
+    """Processor for the Sogou data set."""
+
+    def _process_instance(self, line, is_test=False):
+
+        guid = line['query_id']
+        # text_a is question text_b is passage. This is more natural with next
+        # sentence prediction task
+        text_b = line['passage']
+        text_a = line['query']
+        # Add fake for test dataset
+        if is_test:
+            line['label'] = 0
+        label = str(line['label'])
+        return InputExample(guid=guid, text_a=text_a, text_b=text_b,
+                            label=label)
+
+    def get_train_examples(self, data_dir, do_debug=10000000):
+        """See base class."""
+        lines = self._read_json(
+            os.path.join(data_dir,
+                         "train.json"))
+        examples = []
+        for line in lines:
+            examples.append(self._process_instance(line))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_dev_examples(self, data_dir, do_debug=10000000):
+        """See base class."""
+        lines = self._read_json(os.path.join(data_dir, "valid.json"))
+        examples = []
+        for (i, line) in enumerate(lines):
+            examples.append(self._process_instance(line))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_test_examples(self, data_dir, do_debug=10000000):
+        lines = self._read_json(os.path.join(data_dir, "valid.json"))
+        examples = []
+        for (i, line) in enumerate(lines):
+            examples.append(self._process_instance(line, is_test=True))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1", "2"]
+
+
+class SogouProcessor(DataProcessor):
+    """Processor for the Sogou data set."""
+
+    def _process_instance(self, line, is_test=False):
+        if 'uid' in line:
+            guid = line['uid']
+        else:
+            guid = str(uuid.uuid4())[:8]
+        # text_a is question text_b is passage. This is more natural with next
+        # sentence prediction task
+        text_b = ''.join(line['passage'])
+        text_a = ''.join(line['question'])
+        # Add fake for test dataset
+        if is_test:
+            line['label'] = 0
+        label = str(line['label'])
+        return InputExample(guid=guid, text_a=text_a, text_b=text_b,
+                            label=label)
+
+    def get_train_examples(self, data_dir, do_debug=10000000):
+        """See base class."""
+        lines = self._read_json(
+            os.path.join(data_dir,
+                         "qp-train.jsonl"))
+        examples = []
+        for line in lines:
+            examples.append(self._process_instance(line))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_dev_examples(self, data_dir, do_debug=10000000):
+        """See base class."""
+        lines = self._read_json(os.path.join(data_dir, "qp-dev.jsonl"))
+        examples = []
+        for (i, line) in enumerate(lines):
+            examples.append(self._process_instance(line))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_test_examples(self, data_dir, do_debug=10000000):
+        lines = self._read_json(os.path.join(data_dir, "qp-dev.jsonl"))
+        examples = []
+        for (i, line) in enumerate(lines):
+            examples.append(self._process_instance(line, is_test=True))
+            if len(examples) == do_debug:
+                break
+        return examples
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
 
 
 class MnliProcessor(DataProcessor):
@@ -200,7 +315,7 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
     label_map = {label : i for i, label in enumerate(label_list)}
 
     features = []
-    for (ex_index, example) in enumerate(examples):
+    for (ex_index, example) in enumerate(tqdm(examples)):
         tokens_a = tokenizer.tokenize(example.text_a)
 
         tokens_b = None
@@ -396,12 +511,16 @@ def main():
         "cola": ColaProcessor,
         "mnli": MnliProcessor,
         "mrpc": MrpcProcessor,
+        "sogou": SogouProcessor,
+        "sogouyesno": SogouYesNoProcessor
     }
 
     num_labels_task = {
         "cola": 2,
         "mnli": 3,
         "mrpc": 2,
+        "sogou": 2,
+        "sogouyesno": 3
     }
 
     if args.local_rank == -1 or args.no_cuda:
@@ -431,8 +550,8 @@ def main():
     if not args.do_train and not args.do_eval:
         raise ValueError("At least one of `do_train` or `do_eval` must be True.")
 
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
-        raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+    #if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
+     #   raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
     os.makedirs(args.output_dir, exist_ok=True)
 
     task_name = args.task_name.lower()
@@ -558,7 +677,7 @@ def main():
 
     # Load a trained model that you have fine-tuned
     model_state_dict = torch.load(output_model_file)
-    model = BertForSequenceClassification.from_pretrained(args.bert_model, state_dict=model_state_dict)
+    model = BertForSequenceClassification.from_pretrained(args.bert_model, state_dict=model_state_dict, num_labels=num_labels)
     model.to(device)
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
@@ -585,7 +704,6 @@ def main():
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
             label_ids = label_ids.to(device)
-
             with torch.no_grad():
                 tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
                 logits = model(input_ids, segment_ids, input_mask)
