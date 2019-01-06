@@ -108,6 +108,50 @@ class InputFeatures(object):
         self.end_position = end_position
 
 
+def read_sogou_examples(input_file, is_training):
+    """Read a SQuAD json file into a list of SquadExample."""
+    input_data = []
+
+    with open(input_file, "r") as reader:
+        for line in reader:
+            input_data.append(json.loads(line))
+
+    examples = []
+    for entry in input_data:
+        if len(entry['passage']) == 0:
+            print("Invalid passage with length equals 0")
+            continue
+        qas_id = entry['query_id']
+        paragraph_text = entry['passage']
+        question_text = entry['query']
+        doc_tokens = []
+        for c in paragraph_text:
+            doc_tokens.append(c)
+        start_position = -1
+        end_position = -1
+        orig_answer_text = ''
+
+        if is_training:
+            is_impossible = entry["is_impossible"]
+            if not is_impossible:
+                start_position = entry['answer_start']
+                end_position = entry['answer_end']
+                orig_answer_text = entry['answer_text']
+            else:
+                continue
+
+        example = SquadExample(
+            qas_id=qas_id,
+            question_text=question_text,
+            doc_tokens=doc_tokens,
+            orig_answer_text=orig_answer_text,
+            start_position=start_position,
+            end_position=end_position)
+
+        examples.append(example)
+    print("total load %s" % (len(examples)))
+    return examples
+
 def read_squad_examples(input_file, is_training):
     """Read a SQuAD json file into a list of SquadExample."""
     with open(input_file, "r", encoding='utf-8') as reader:
@@ -550,7 +594,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                                                       tmp_result.end_logits]]) + '\n')
         fout_probe.write(json.dumps([example.qas_id, tmp_result.probe_logits]) + '\n')
     with open(output_prediction_file, "w") as writer:
-        writer.write(json.dumps(all_predictions, indent=4) + "\n")
+        writer.write(json.dumps(all_predictions, indent=4, ensure_ascii=False) + "\n")
 
     with open(output_nbest_file, "w") as writer:
         writer.write(json.dumps(all_nbest_json) + "\n")
@@ -720,6 +764,8 @@ def main():
                              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model checkpoints and predictions will be written.")
+    parser.add_argument("--task", default='squad', type=str, required=True,
+                        help="The dataset for the task.")
 
     ## Other parameters
     parser.add_argument("--train_file", default=None, type=str, help="SQuAD json for training. E.g., train-v1.1.json")
@@ -828,8 +874,15 @@ def main():
 
     train_examples = None
     num_train_steps = None
+    if args.task == 'squad':
+        read_examples = read_squad_examples
+    elif args.task == 'sogou':
+        read_examples = read_sogou_examples
+    else:
+        raise ValueError(
+            "Task %s not support." % args.task)
     if args.do_train:
-        train_examples = read_squad_examples(
+        train_examples = read_examples(
             input_file=args.train_file, is_training=True)
         if args.debug:
             train_examples = train_examples[:256]
@@ -968,7 +1021,11 @@ def main():
                 losses_logger.write(json.dumps([iter_loss.detach().cpu().tolist() for iter_loss in prob_losses]) + '\n')
 
         # Save a trained model
-        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+        model_to_save = model.module if hasattr(model,
+                                            'module') else model  # Only save the model it-self
+    output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
+    if args.do_train:
+        torch.save(model_to_save.state_dict(), output_model_file)
 
     output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
     if args.do_train:
@@ -979,7 +1036,7 @@ def main():
     model.to(device)
 
     if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        eval_examples = read_squad_examples(
+        eval_examples = read_examples(
             input_file=args.predict_file, is_training=False)
         if args.debug:
             eval_examples = eval_examples[:256]
