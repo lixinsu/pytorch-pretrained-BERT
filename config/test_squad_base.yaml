@@ -1,0 +1,12 @@
+do_train: False
+do_predict: True
+task: squad
+bert_model: bert-base-uncased
+task: squad
+train_file: data/datasets/squad/train-v1.1.json
+predict_file: data/datasets/squad/dev-v1.1.json
+model_dir: data/models/squadv1.1_b24_truncated/
+output_dir: data/predictions/test_squad_base
+train_batch_size: 24 
+num_train_epochs: 2.0
+max_seq_length: 384
