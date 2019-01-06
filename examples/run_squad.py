@@ -31,6 +31,7 @@ import pickle
 from tqdm import tqdm, trange
 
 import ipdb
+import yaml
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
@@ -725,13 +726,16 @@ def warmup_linear(x, warmup=0.002):
 def main():
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--config", default=None, type=str, required=True,
+                        help="Config file")
+
     ## Required parameters
-    parser.add_argument("--bert_model", default=None, type=str, required=True,
+    parser.add_argument("--bert_model", default=None, type=str, required=False,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
                              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
-    parser.add_argument("--output_dir", default=None, type=str, required=True,
+    parser.add_argument("--output_dir", default=None, type=str, required=False,
                         help="The output directory where the model checkpoints and predictions will be written.")
-    parser.add_argument("--task", default='squad', type=str, required=True,
+    parser.add_argument("--task", default='squad', type=str, required=False,
                         help="The dataset for the task.")
 
     ## Other parameters
@@ -796,7 +800,14 @@ def main():
                              "Positive power of 2: static loss scaling value.\n")
 
     args = parser.parse_args()
-
+    config = yaml.load(open(args.config))
+    default_config = vars(args)
+    default_config.update(config)
+    new_args = argparse.Namespace()
+    print(json.dumps(default_config, indent=2))
+    for k, v in default_config.items():
+        setattr(new_args, k, v)
+    args = new_args
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         n_gpu = torch.cuda.device_count()
@@ -974,7 +985,9 @@ def main():
         # Save a trained model
         model_to_save = model.module if hasattr(model,
                                             'module') else model  # Only save the model it-self
-    output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
+    if args.model_dir is None:
+        args.model_dir = args.output_dir
+    output_model_file = os.path.join(args.model_dir, "pytorch_model.bin")
     if args.do_train:
         torch.save(model_to_save.state_dict(), output_model_file)
 
