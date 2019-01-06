@@ -1041,7 +1041,6 @@ def main():
     if args.do_train:
         torch.save(model_to_save.state_dict(), output_model_file)
 
-    output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
     if args.do_train:
         torch.save(model_to_save.state_dict(), output_model_file)
     # Load a trained model that you have fine-tuned
