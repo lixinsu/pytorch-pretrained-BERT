@@ -481,6 +481,8 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                       'final_logits.jsonl'), 'w')
     fout_probe = open(os.path.join(os.path.dirname(output_prediction_file),
                       'probe_logits.jsonl'), 'w')
+    fout_mask = open(os.path.join(os.path.dirname(output_prediction_file),
+                      'input_mask.jsonl'), 'w')
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
 
@@ -594,6 +596,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         fout_final.write(json.dumps([example.qas_id, [tmp_result.start_logits,
                                                       tmp_result.end_logits]]) + '\n')
         fout_probe.write(json.dumps([example.qas_id, tmp_result.probe_logits]) + '\n')
+        fout_mask.write(json.dumps([example.qas_id, example_index_to_features[example_index][0].input_mask]) + '\n')
     with open(output_prediction_file, "w") as writer:
         writer.write(json.dumps(all_predictions, indent=4, ensure_ascii=False) + "\n")
 
@@ -881,6 +884,7 @@ def main():
     #if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
     #    raise ValueError("Output directory () already exists and is not empty.")
     os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.model_dir, exist_ok=True)
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model)
 
