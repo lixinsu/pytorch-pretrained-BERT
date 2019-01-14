@@ -37,14 +37,14 @@ from .file_utils import cached_path
 logger = logging.getLogger(__name__)
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
-    'bert-base-uncased': '/users/sulixin/research/sigir/pytorch-pretrained-BERT/data/downloads/bert-base-uncased.tar.gz',
+    'bert-base-uncased': 'data/downloads/bert-base-uncased.tar.gz',
      #"https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz",
     'bert-large-uncased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased.tar.gz",
     'bert-base-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-cased.tar.gz",
     'bert-large-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-cased.tar.gz",
     'bert-base-multilingual-uncased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-multilingual-uncased.tar.gz",
     'bert-base-multilingual-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-multilingual-cased.tar.gz",
-    'bert-base-chinese': '/users/sulixin/research/sigir/pytorch-pretrained-BERT/data/downloads/bert-base-chinese.tar.gz',
+    'bert-base-chinese': 'data/downloads/bert-base-chinese.tar.gz',
     #'bert-base-chinese': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-chinese.tar.gz",
 }
 CONFIG_NAME = 'bert_config.json'
