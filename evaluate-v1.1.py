@@ -29,6 +29,9 @@ def normalize_answer(s):
 def f1_score(prediction, ground_truth):
     prediction_tokens = normalize_answer(prediction).split()
     ground_truth_tokens = normalize_answer(ground_truth).split()
+    if args.task == 'sogou':
+        prediction_tokens = list(normalize_answer(prediction))
+        ground_truth_tokens = list(normalize_answer(ground_truth))
     common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
     num_same = sum(common.values())
     if num_same == 0:
@@ -51,8 +54,9 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     return max(scores_for_ground_truths)
 
 
-def evaluate(dataset, predictions):
+def evaluate(dataset, predictions, result_file=None):
     f1 = exact_match = total = 0
+    rv = {}
     for article in dataset:
         for paragraph in article['paragraphs']:
             for qa in paragraph['qas']:
@@ -64,15 +68,51 @@ def evaluate(dataset, predictions):
                     continue
                 ground_truths = list(map(lambda x: x['text'], qa['answers']))
                 prediction = predictions[qa['id']]
-                exact_match += metric_max_over_ground_truths(
+                cur_em = metric_max_over_ground_truths(
                     exact_match_score, prediction, ground_truths)
-                f1 += metric_max_over_ground_truths(
+                exact_match += cur_em
+                cur_f1 = metric_max_over_ground_truths(
                     f1_score, prediction, ground_truths)
-
+                f1 += cur_f1
+                rv[qa['id']] = {'em': cur_em, 'f1': cur_f1}
+    if result_file is not None:
+        print('save details results to %s' % result_file)
+        json.dump(rv, open(result_file, 'w'))
     exact_match = 100.0 * exact_match / total
     f1 = 100.0 * f1 / total
 
     return {'exact_match': exact_match, 'f1': f1}
+
+
+def evaluate_sogou(datasets, predictions, result_file=None):
+    f1 = exact_match = total = 0
+    rv = {}
+    for d in datasets:
+        if d['answer_text'] == '':
+            continue
+        if d['query_id'] not in predictions:
+            print('%s not in predictions' % d['query_id'])
+            continue
+        total += 1
+        ground_truths = [d['answer_text']]
+        prediction = predictions[d['query_id']]
+        # remove space in the answer text
+        prediction = ''.join(prediction.split())
+        cur_em = metric_max_over_ground_truths(
+            exact_match_score, prediction, ground_truths)
+        exact_match += cur_em
+        cur_f1 = metric_max_over_ground_truths(
+            f1_score, prediction, ground_truths)
+        f1 += cur_f1
+        rv[d['query_id']] = {'em': cur_em, 'f1': cur_f1}
+
+    if result_file is not None:
+        print('save details results to %s' % result_file)
+        json.dump(rv, open(result_file, 'w'))
+    exact_match = 100.0 * exact_match / total
+    f1 = 100.0 * f1 / total
+
+    return {'exact_match': exact_match, 'f1': f1, 'total': total}
 
 
 if __name__ == '__main__':
@@ -81,14 +121,18 @@ if __name__ == '__main__':
         description='Evaluation for SQuAD ' + expected_version)
     parser.add_argument('dataset_file', help='Dataset file')
     parser.add_argument('prediction_file', help='Prediction File')
+    parser.add_argument('--result_file', help='resultsfile File')
+    parser.add_argument('--task', help='which dataset')
     args = parser.parse_args()
     with open(args.dataset_file) as dataset_file:
-        dataset_json = json.load(dataset_file)
-        if (dataset_json['version'] != expected_version):
-            print('Evaluation expects v-' + expected_version +
-                  ', but got dataset with v-' + dataset_json['version'],
-                  file=sys.stderr)
-        dataset = dataset_json['data']
+        if args.task == 'squad':
+            dataset_json = json.load(dataset_file)
+            dataset = dataset_json['data']
+        else:
+            dataset = [json.loads(line) for line in dataset_file]
     with open(args.prediction_file) as prediction_file:
         predictions = json.load(prediction_file)
-    print(json.dumps(evaluate(dataset, predictions)))
+    if args.task == 'sogou':
+        print(json.dumps(evaluate_sogou(dataset, predictions, result_file=args.result_file)))
+    elif args.task == 'squad':
+        print(json.dumps(evaluate(dataset, predictions, result_file=args.result_file)))
