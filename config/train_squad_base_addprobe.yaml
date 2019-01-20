@@ -7,6 +7,6 @@ predict_file: data/datasets/squad/dev-v2.0.json
 model_dir: data/models/squadv2.0_b24_addprobe/
 output_dir: data/predictions/test_squadv2dev_addprobe
 version_2_with_negative: True
-train_batch_size: 8
+train_batch_size: 24
 num_train_epochs: 2.0
 max_seq_length: 384
