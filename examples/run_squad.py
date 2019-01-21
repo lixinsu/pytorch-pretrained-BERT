@@ -137,13 +137,16 @@ def read_sogou_examples(input_file, is_training, version_2_with_negative):
         start_position = -1
         end_position = -1
         orig_answer_text = ''
-
+        is_impossible = entry.get("is_impossible", False)
         if is_training:
-            is_impossible = entry["is_impossible"]
             if not is_impossible:
                 start_position = entry['answer_start']
                 end_position = entry['answer_end']
                 orig_answer_text = entry['answer_text']
+            elif version_2_with_negative:
+                start_position = -1
+                end_position = -1
+                orig_answer_text = ''
             else:
                 continue
 
@@ -153,7 +156,8 @@ def read_sogou_examples(input_file, is_training, version_2_with_negative):
             doc_tokens=doc_tokens,
             orig_answer_text=orig_answer_text,
             start_position=start_position,
-            end_position=end_position)
+            end_position=end_position,
+            is_impossible=is_impossible)
 
         examples.append(example)
     print("total load %s" % (len(examples)))
@@ -641,6 +645,10 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             if not best_non_null_entry:
                 if entry.text:
                     best_non_null_entry = entry
+        if best_non_null_entry is None:
+            best_non_null_entry = _NbestPrediction(text="empty",
+                                                   start_logit=0.0,
+                                                   end_logit=0.0)
         probs = _compute_softmax(total_scores)
 
         nbest_json = []
@@ -675,7 +683,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         fout_final.write(json.dumps([example.qas_id, [tmp_result.start_logits,
                                                       tmp_result.end_logits]]) + '\n')
         fout_probe.write(json.dumps([example.qas_id, tmp_result.probe_logits]) + '\n')
-        fout_mask.write(json.dumps([example.qas_id, example_index_to_features[example_index][0].input_mask]) + '\n')
+        fout_mask.write(json.dumps([example.qas_id, example_index_to_features[example_index][0].segment_ids]) + '\n')
     with open(output_prediction_file, "w") as writer:
         writer.write(json.dumps(all_predictions, indent=4, ensure_ascii=False) + "\n")
 
@@ -1091,7 +1099,7 @@ def main():
         model.train()
         main_logger = open(os.path.join( args.output_dir, 'main_losses.json'), 'w')
         losses_logger = open(os.path.join(args.output_dir, 'probe_losses.json'), 'w')
-        for _ in trange(int(args.num_train_epochs), desc="Epoch"):
+        for iterep in trange(int(args.num_train_epochs), desc="Epoch"):
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
@@ -1125,9 +1133,11 @@ def main():
                 main_logger.write(json.dumps(loss.detach().cpu().tolist()) + '\n')
                 losses_logger.write(json.dumps([iter_loss.detach().cpu().tolist() for iter_loss in prob_losses]) + '\n')
 
-        # Save a trained model
-        model_to_save = model.module if hasattr(model,
+            # Save a trained model
+            model_to_save = model.module if hasattr(model,
                                             'module') else model  # Only save the model it-self
+            torch.save(model_to_save.state_dict(),
+                       os.path.join(args.model_dir, "%s.pytorch_model.bin" % str(iterep)))
     if args.model_dir is None:
         args.model_dir = args.output_dir
     output_model_file = os.path.join(args.model_dir, "pytorch_model.bin")
